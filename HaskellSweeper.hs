@@ -1,17 +1,27 @@
 module Main(main) where
 
 import Data.Char (toLower)
-import Data.List (isPrefixOf)
+import Data.List (isPrefixOf, unfoldr)
+import Data.Maybe (mapMaybe)
 import Data.Set (Set, empty, insert, delete, member, size, toList)
 import Prelude hiding (Either(..))
 import qualified Prelude as P
 import System.Environment (getArgs)
 import System.IO.Error (tryIOError)
 import qualified System.IO.Strict as S
-import System.Random (StdGen, getStdGen, randomRs, randoms, mkStdGen)
+import System.Random (StdGen, getStdGen, randomRs, randoms, mkStdGen, split)
 import UI.NCurses (Update,  Window, Curses, Color(..), ColorID, Event(..), Key(..), moveCursor, setColor, drawString, drawLineH, runCurses, setEcho, defaultWindow, newColorID, updateWindow, windowSize, glyphLineH, render, getEvent)
 
-type Grid = [[Cell]]
+data Layout = Layout
+    (Int, Int)      -- (Width, Height)
+    [[Maybe Cell]]  -- (Layout), Nothing means use the layer below.
+
+data Layer = Layer
+    Layout    -- (Layout), Nothing means use the layer below.
+    [[Bool]]  -- Occurences on a grid with each block being the dimentions of the layout 
+
+type Grid = [Layer]
+type GridDescription = [(Int, Layout)] -- [(density, layout)]
 data Cell = Empty | Mine deriving Eq
 
 type Visibility = Set Position
@@ -43,8 +53,24 @@ getIndex l i
     | i <= 0    = l!!(-2*i)
     | otherwise = l!!(2*i-1)
 
+-- TODO account for collisions of layers
 getCell :: Grid -> Position -> Cell
-getCell grid (x, y) = getIndex (getIndex grid x) y
+getCell grid (x, y) = case (mapMaybe getLayerCell grid) of
+    []      -> Empty
+    cell:_  -> cell
+    where
+        getLayerCell :: Layer -> Maybe Cell
+        getLayerCell (Layer layout occurs) = if isAnOccurance then layoutCell else Nothing
+            where
+                isAnOccurance = getIndex (getIndex occurs layerX) layerY
+                Layout (width, height) cells = layout
+                layerX = x `div` width
+                layerY = y `div` height
+                layoutX = abs $ x `mod` width
+                layoutY = abs $ y `mod` height
+                layoutCell = cells!!layoutY!!layoutX
+    --getIndex (getIndex grid x) y
+
 
 surroundingPositions :: Position -> [Position]
 surroundingPositions (x, y) = [(i, j) | i<-[x-1..x+1], j<-[y-1..y+1], x /= i || y /= j]
@@ -84,8 +110,74 @@ showCell GameState{_grid=grid, _visibility=vis, _markers=mar, _playState=playsta
         markerColor Dead Empty = setColor $ pal!!2
         markerColor _    _     = setColor $ pal!!8
 
+createLayout :: [String] -> Layout
+createLayout rows = Layout (width, height) cells
+    where
+        height  = length rows
+        width   = maximum . map length $ rows
+        cells   = map (map parseChar) rows
+
+        parseChar :: Char -> Maybe Cell
+        parseChar 'X' = Just Mine
+        parseChar ' ' = Just Empty
+        parseChar _   = Nothing
+
 randomGrid :: StdGen -> Int -> Grid
-randomGrid gen den = [map (\n -> if n<den then Mine else Empty) $ randomRs (0, 99 :: Int) (mkStdGen g) | g<-(randoms gen) :: [Int]]
+randomGrid baseGen baseDen =  grid
+    where
+
+        grid = zipWith createLayer (unfoldr (Just . split) baseGen) gridDescription 
+
+        gridDescription :: GridDescription
+        gridDescription = [
+{-
+                -- Some simple box rooms
+                (1 + (baseDen `div` 3), createLayout
+                    ["XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+                     "X                                                             X",
+                     "X                                                             X",
+                     "    XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX   X",
+                     "X                                                             X",
+                     "X                                                             X",
+                     "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"]),
+
+                -- Some pretty things
+                (baseDen, createLayout
+                    ["       XXX       ",
+                     "     XXXXXXX     ",
+                     "   XXXXXXXXXXX   ",
+                     "XXXXXXXXXXXXXXXXX",
+                     "   XXXXXXXXXXX   ",
+                     "     XXXXXXX     ",
+                     "       XXX       "]),
+-}
+
+                -- David
+                (baseDen, createLayout
+                    ["                               ",
+                     "  XXX    XX   X  X  XXX  XXX   ",
+                     "  X  X  X  X  X  X   X   X  X  ",
+                     "  X  X  XXXX  X  X   X   X  X  ",
+                     "  X  X  X  X  X  X   X   X  X  ",
+                     "  XXX   X  X   XX   XXX  XXX   ",
+                     "                               "]),
+
+                -- Baz
+                (baseDen, createLayout
+                    ["                    ",
+                     "  XXX    XX   XXXX  ",
+                     "  X  X  X  X     X  ",
+                     "  XXXX  XXXX    X   ",
+                     "  X  X  X  X   X    ",
+                     "  XXX   X  X  XXXX  ",
+                     "                    "]),
+
+                -- Base layout of Mines
+                (baseDen, createLayout ["X"])
+            ]
+
+        createLayer :: StdGen -> (Int, Layout) -> Layer
+        createLayer gen (den, layout) = Layer layout [map (<den) $ randomRs (0, 99 :: Int) (mkStdGen g) | g<-(randoms gen) :: [Int]]
 
 createGameStates :: StdGen -> Options -> Score -> [GameState]
 createGameStates gen opts highscore =  map (\g -> GameState 
