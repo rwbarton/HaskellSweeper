@@ -17,12 +17,14 @@ cabal-version:       >=1.10
 
 executable HaskellSweeper
   main-is:             HaskellSweeper.hs
-  -- other-modules:       
+  other-modules:       Types, YicesSweeper
   -- other-extensions:    
   build-depends:       base >=4.6 && <4.9,
                        containers,
                        ncurses,
                        random,
-                       strict
+                       strict,
+                       process,
+                       transformers
 
   default-language:    Haskell2010

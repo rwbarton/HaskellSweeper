@@ -3,7 +3,7 @@
 module Main(main) where
 
 import Data.Char (toLower, isAlphaNum)
-import Data.List (intercalate)
+import Data.List (intercalate, foldl')
 import Data.Set (Set, empty, insert, delete, member, size, toList)
 import Prelude hiding (Either(..))
 import qualified Prelude as P
@@ -12,50 +12,13 @@ import System.IO.Error (tryIOError)
 import qualified System.IO.Strict as S
 import System.Random (StdGen, getStdGen, randomRs, randoms, mkStdGen)
 import UI.NCurses (Update,  Window, Curses, Color(..), ColorID, Event(..), Key(..), moveCursor, setColor, drawString, drawLineH, runCurses, setEcho, defaultWindow, newColorID, updateWindow, windowSize, glyphLineH, render, getEvent)
+import Control.Monad.IO.Class (liftIO)
 
-type Grid = [[Cell]]
-data Cell = Empty | Mine deriving Eq
-
-type Visibility = Set Position
-type Markers    = Set Position
-type Position   = (Int, Int)
-type Score      = Int
-data PlayState  = Alive | Dead deriving Eq
-type Panel      = (Position, Position) -- The panel is used as limits for recursing down empty cells (It is supposed to be bigger than the terminal)
-data Option     = Adventure | AutoOpen | Density Int deriving (Eq, Ord, Show)
-type Options    = Set Option
-
-data Move       = Up | Down | Left | Right
-data GameState  = GameState
-    {
-        _grid       :: Grid,
-        _visibility :: Visibility,
-        _markers    :: Markers,
-        _position   :: Position,
-        _score      :: Score,
-        _highscore  :: Score,
-        _playState  :: PlayState,
-        _panel      :: Panel,
-        _options    :: Options
-    }
-
--- List indices are like this: [0, 1, -1, 2, -2..]
-getIndex :: [a] -> Int -> a
-getIndex l i
-    | i <= 0    = l!!(-2*i)
-    | otherwise = l!!(2*i-1)
-
-getCell :: Grid -> Position -> Cell
-getCell grid (x, y) = getIndex (getIndex grid x) y
-
-surroundingPositions :: Position -> [Position]
-surroundingPositions (x, y) = [(i, j) | i<-[x-1..x+1], j<-[y-1..y+1], x /= i || y /= j]
+import Types
+import YicesSweeper
 
 inBounds :: Position -> Panel -> Bool
 inBounds (x, y) ((a, b), (c, d)) = a <= x && x <= c && b <= y && y <= d
-
-tallyMines :: Grid -> Position -> Int
-tallyMines grid pos = length $ filter (==Mine) $ map (getCell grid) (surroundingPositions pos)
 
 tallyMarkers :: Markers -> Position -> Int
 tallyMarkers markers pos = length $ filter (\m -> member m markers) (surroundingPositions pos)
@@ -64,8 +27,9 @@ showGrid :: GameState -> Panel -> Position -> [ColorID] -> Update ()
 showGrid gamestate ((left, top), (right, bottom)) (sx, sy) pal = sequence_ [do moveCursor (toInteger $ y - sy) (toInteger $ x - sx); showCell gamestate (x,y) pal | x<-[left..right], y<-[top..bottom]]
 
 showCell :: GameState -> Position -> [ColorID] -> Update ()
-showCell GameState{_grid=grid, _visibility=vis, _markers=mar, _playState=playstate} pos pal
-    | member pos mar       = do markerColor playstate currentCell; drawString "#";
+showCell GameState{_grid=grid, _visibility=vis, _markers=mar, _playState=playstate, _position=position} pos pal
+    | pos == position      = do setColor $ pal!!0; drawString "@"
+    | member pos mar       = do markerColor playstate currentCell; drawString "~";
     | playstate == Dead &&
       currentCell == Mine  = drawMine
     | member pos vis       = showCell' currentCell (tallyMines grid pos)
@@ -76,8 +40,8 @@ showCell GameState{_grid=grid, _visibility=vis, _markers=mar, _playState=playsta
 
         showCell' :: Cell -> Int -> Update ()
         showCell' Mine  _ = drawMine
-        showCell' Empty 0 = do setColor $ pal!!0; drawString "•";
-        showCell' Empty t = do setColor $ pal!!t; drawString $ show t;
+        -- showCell' Empty 0 = do setColor $ pal!!0; drawString "•";
+        showCell' Empty t = do setColor $ pal!!t; drawString ["##.~PmmX{" !! t]; -- ["77.~PwDX{" !! t];
 
         drawMine :: Update ()
         drawMine = do setColor $ pal!!8; drawString "X";
@@ -100,7 +64,8 @@ createGameStates gen opts highscore =  map (\g -> GameState
         _highscore  = highscore,
         _playState  = Alive,
         _panel      = ((-150, -50), (150, 50)),
-        _options    = opts
+        _options    = opts,
+        _autopilot  = True
     }) ((randoms gen) :: [Int])
     where
         density :: [Option] -> Int
@@ -147,6 +112,7 @@ main = do
         w <- defaultWindow
         palette <- sequence
             [
+{-
                 newColorID ColorBlue    ColorDefault 1,
                 newColorID ColorWhite   ColorDefault 2,
                 newColorID ColorYellow  ColorDefault 3,
@@ -156,12 +122,49 @@ main = do
                 newColorID ColorBlack   ColorDefault 7,
                 newColorID ColorRed     ColorDefault 8,
                 newColorID ColorRed     ColorDefault 9
+-}
+{-
+-- st_ colors
+                newColorID ColorBlack   ColorDefault 1,
+                newColorID (Color 8)    ColorDefault 2,
+                newColorID ColorBlue    ColorDefault 3,
+                newColorID ColorCyan    ColorDefault 4,
+                newColorID (Color 12)   ColorDefault 5,
+                newColorID (Color 14)   ColorDefault 6,
+                newColorID ColorYellow  ColorDefault 7,
+                newColorID (Color 9)    ColorDefault 8,
+                newColorID ColorRed     ColorDefault 9
+-}
+-- shoals colors
+                newColorID ColorWhite   ColorDefault 1,
+                newColorID ColorYellow  ColorDefault 2,
+                newColorID ColorYellow  ColorDefault 3,
+                newColorID (Color 12)   ColorDefault 4,
+                newColorID ColorGreen   ColorDefault 5,
+                newColorID ColorCyan    ColorDefault 6,
+                newColorID (Color 11)   ColorDefault 7,
+                newColorID (Color 9)    ColorDefault 8,
+                newColorID ColorBlue    ColorDefault 9
+{-
+-- swamp colors
+                newColorID ColorYellow  ColorDefault 1,
+                newColorID ColorGreen   ColorDefault 2,
+                newColorID ColorYellow  ColorDefault 3,
+                newColorID (Color 12)   ColorDefault 4,
+                newColorID ColorWhite   ColorDefault 5,
+                newColorID ColorYellow  ColorDefault 6,
+                newColorID (Color 10)   ColorDefault 7,
+                newColorID ColorGreen   ColorDefault 8,
+                newColorID ColorBlue    ColorDefault 9
+-}
             ]
 
         let
-            restartLoop :: (GameState -> Curses (Score, Bool)) -> [GameState] -> Curses Score
+            restartLoop :: (GameState -> YicesState -> Curses (Score, Bool)) -> [GameState] -> Curses Score
             restartLoop f (g:ng:gs) = do
-                quit <- f g
+                ys <- liftIO newYicesState
+                quit <- f g ys
+                liftIO $ killYicesState ys
                 case quit of
                     (hs, True)  -> restartLoop f (ng{_highscore=hs}:gs)
                     (hs, False) -> return hs
@@ -171,8 +174,8 @@ main = do
     writeHighscore options new_highscore
 
 
-doUpdate :: Window -> [ColorID] -> GameState -> Curses (Score, Bool)
-doUpdate w palette g@GameState{_position=(x, y), _score=score, _highscore=highscore, _playState=playstate, _options=opts} = do
+doUpdate :: Window -> [ColorID] -> GameState -> YicesState -> Curses (Score, Bool)
+doUpdate w palette g@GameState{_position=(x, y), _score=score, _highscore=highscore, _playState=playstate, _options=opts} ys = do
     updateWindow w $ do
         (sizeY, sizeX) <- windowSize
         let (sizeX', sizeY') = (fromInteger sizeX, fromInteger sizeY)
@@ -183,27 +186,49 @@ doUpdate w palette g@GameState{_position=(x, y), _score=score, _highscore=highsc
         moveCursor 0 0
         showGrid g panel (left, top) palette
         moveCursor (sizeY - 2) 0
-        setColor $ palette!!2
+        setColor $ if _autopilot g then palette!!3 else palette!!2
         drawLineH (Just glyphLineH) sizeX
         moveCursor (sizeY - 1) 0
-        setColor $ palette!!0
-        drawString $ take (sizeX'-1) $ concat [show o ++ " | " | o <- toList opts] ++ case playstate of
-            Alive -> "Score: " ++ show score ++ repeat ' '
-            Dead  -> "Game over! Your score is: " ++ show score ++ " | Highscore is: " ++ show highscore ++ repeat ' '
+        setColor $ palette!!1
+        drawString $ take (sizeX'-1) $ concat [show o ++ " | " | o <- toList opts ] ++ (case playstate of
+            Alive -> "Score: " ++ show score
+            Dead  -> "Game over! Your score is: " ++ show score)
+          ++ " | Highscore is: " ++ show highscore ++ repeat ' '
         moveCursor (div sizeY 2) (div sizeX 2)
     render
-    inputUpdate w palette g
+    inputUpdate w palette g ys
 
-inputUpdate :: Window -> [ColorID] -> GameState -> Curses (Score, Bool)
-inputUpdate w palette g = do
-    getEvent w (Just 100) >>= maybe
-        (doUpdate w palette g)
+inputUpdate :: Window -> [ColorID] -> GameState -> YicesState -> Curses (Score, Bool)
+inputUpdate w palette g ys = do
+    getEvent w (Just 30) >>= maybe
+        (if _autopilot g
+         then autopilot
+         else doUpdate w palette g ys)
         (\case
             EventCharacter 'q' -> return (_highscore g, False)
             EventCharacter 'Q' -> return (_highscore g, False)
             EventCharacter 'r' -> return (_highscore g, True)
             EventCharacter 'R' -> return (_highscore g, True)
-            key                -> doUpdate w palette (stepGameWorld key g))
+            key                -> doUpdate w palette (stepGameWorld key g) ys)
+  where autopilot
+          | _playState g == Dead = return (_highscore g, True)
+          | _playState g == Alive
+            = do
+              ys' <- liftIO (updateYices g ys)
+              res <- liftIO (queryYices g ys')
+              let g' = case res of
+                         Nothing -> g { _autopilot = False }
+                         Just ((cx, cy), b) ->
+                           let (px, py) = _position g
+                               keys = waltz (cx - px) (cy - py) ++ [if b then 'm' else ' ']
+                               waltz a b
+                                 | a < 0 = 'a' : waltz (a+1) b
+                                 | a > 0 = 'd' : waltz (a-1) b
+                                 | b < 0 = 'w' : waltz a (b+1)
+                                 | b > 0 = 's' : waltz a (b-1)
+                                 | otherwise = []
+                           in foldl' (\gs k -> stepGameWorld (EventCharacter k) gs) g keys
+              doUpdate w palette g' ys'
 
 movePosition :: GameState -> Move -> GameState
 movePosition g@GameState{_grid=grid, _visibility=vis, _position=(x, y), _panel=((left, top), (right, bottom))} move =
@@ -301,6 +326,7 @@ stepGameWorld (EventCharacter 'e')            gamestate                    = pla
 stepGameWorld (EventCharacter 'E')            gamestate                    = placeMarker  gamestate
 stepGameWorld (EventCharacter ' ')            gamestate                    = clickCell    gamestate
 stepGameWorld (EventSpecialKey KeyEnter)      gamestate                    = clickCell    gamestate
+stepGameWorld (EventCharacter '\t')           gamestate                    = gamestate { _autopilot = not (_autopilot gamestate) }
 stepGameWorld _                               gamestate                    = gamestate
 
 -- animate :: GameState -> GameState
